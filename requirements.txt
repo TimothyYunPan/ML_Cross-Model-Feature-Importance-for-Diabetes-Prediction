@@ -1,3 +1,7 @@
 streamlit
 pandas
 altair
+numpy
+matplotlib
+seaborn
+torch

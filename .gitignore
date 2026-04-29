@@ -3,6 +3,7 @@ data/
 
 # Saved model weights
 models/*.npy
+models/*.npz
 
 # Python
 __pycache__/

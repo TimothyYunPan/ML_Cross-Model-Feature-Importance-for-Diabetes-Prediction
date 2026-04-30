@@ -6,9 +6,8 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import torch
 
-from ann_model import ANN, ANNNet, DEVICE
+from ann_model import ANN, ANNNet
 from knn_model import KNN
 from logistic_regression import LogisticRegression
 from preprocess import ALL_FEATURES
@@ -21,7 +20,7 @@ FEATURE_NAMES_PATH = MODELS_DIR / "feature_names.npy"
 FEAT_MIN_PATH = MODELS_DIR / "feat_min.npy"
 FEAT_MAX_PATH = MODELS_DIR / "feat_max.npy"
 ANN_CFG_PATH = MODELS_DIR / "ann_best_config.npy"
-ANN_WEIGHTS_PATH = MODELS_DIR / "ann_weights.pt"
+ANN_WEIGHTS_PATH = MODELS_DIR / "ann_weights.npz"
 ANN_IMPORTANCE_PATH = MODELS_DIR / "ann_importances.npy"
 LOGREG_WEIGHTS_PATH = MODELS_DIR / "logreg_weights.npy"
 LOGREG_BIAS_PATH = MODELS_DIR / "logreg_bias.npy"
@@ -68,13 +67,12 @@ def load_ann_model(feature_names: list[str]) -> ANN | None:
         hidden_dim=hidden_dim,
         learning_rate=lr,
         epochs=epochs,
-        device=DEVICE,
     )
-    model.net = ANNNet(len(feature_names), hidden_dim).to(DEVICE)
+    model.net = ANNNet(len(feature_names), hidden_dim)
 
-    state = torch.load(ANN_WEIGHTS_PATH, map_location=DEVICE)
+    with np.load(ANN_WEIGHTS_PATH) as data:
+        state = {k: np.asarray(data[k]) for k in ("W1", "b1", "W2", "b2")}
     model.net.load_state_dict(state)
-    model.net.eval()
     return model
 
 
@@ -250,7 +248,11 @@ with col2:
 
     st.divider()
     st.subheader("Feature Importance")
-    st.caption("Permutation importance from offline evaluation.")
+    st.caption(
+        "Permutation importance: aggregate ΔF1 on the hold-out test set (precomputed). "
+        "It updates when you change Model above, not when you edit inputs like Age or BMI; "
+        "for input sensitivity, use Diabetes Probability above."
+    )
 
     importances = load_importances(selected_model_name)
     if importances is None:

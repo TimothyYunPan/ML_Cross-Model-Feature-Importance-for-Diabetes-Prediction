@@ -4,3 +4,4 @@ altair
 numpy
 matplotlib
 seaborn
+torch

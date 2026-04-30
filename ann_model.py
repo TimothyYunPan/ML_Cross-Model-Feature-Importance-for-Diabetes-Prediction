@@ -10,11 +10,12 @@ Loss:         Binary Cross-Entropy in logit space (numerically stable).
 Optimizer:    Adam (Kingma & Ba 2014), implemented from scratch in NumPy.
 Regularizers: L2 weight decay + early stopping (per proposal §V.B).
 
-Usage:
+Usage
+-----
     python ann_model.py
 
-Requires preprocessed data in models/ (run preprocess.py first).
-Saves best model weights, predictions, and feature importances to models/.
+Requires preprocessed data in ``models/`` (run ``preprocess.py`` first).
+Saves best model weights, predictions, and feature importances to ``models/``.
 """
 
 from __future__ import annotations
@@ -38,10 +39,10 @@ SEED = 42
 # ── Numerically Stable Primitives ────────────────────────────────────────────
 
 def stable_sigmoid(z: np.ndarray) -> np.ndarray:
-    """
-    σ(z) without overflow for large |z|:
-        z >= 0:  1 / (1 + exp(-z))
-        z <  0:  exp(z) / (1 + exp(z))
+    """Sigmoid that avoids ``exp`` overflow for large ``|z|``.
+
+    Branches on the sign of ``z``:
+    ``z >= 0`` uses ``1 / (1 + exp(-z))``, ``z < 0`` uses ``exp(z) / (1 + exp(z))``.
     """
     z = np.asarray(z, dtype=np.float64)
     out = np.empty_like(z)
@@ -53,13 +54,18 @@ def stable_sigmoid(z: np.ndarray) -> np.ndarray:
 
 
 def bce_with_logits(logits: np.ndarray, y: np.ndarray) -> float:
-    """
-    Numerically stable mean BCE given raw logits z and binary labels y:
-        L = mean( max(z, 0) - z·y + log1p(exp(-|z|)) )
+    """Mean binary cross-entropy from raw logits.
 
-    Equivalent to -mean[y·log σ(z) + (1-y)·log(1-σ(z))] but safe for large |z|.
-    Working in logit space sidesteps log(0) entirely — the proposal §V.B
-    "clip probabilities to [ε, 1-ε]" mitigation becomes unnecessary.
+    Uses ``max(z, 0) - z·y + log1p(exp(-|z|))`` for numerical stability,
+    which sidesteps ``log(0)`` and supersedes the proposal §V.B "clip
+    probabilities to [ε, 1-ε]" mitigation.
+
+    Parameters
+    ----------
+    logits : np.ndarray
+        Pre-sigmoid output, shape ``(N,)``.
+    y : np.ndarray
+        Binary labels in ``{0, 1}``, shape ``(N,)``.
     """
     return float(np.mean(
         np.maximum(logits, 0.0) - logits * y + np.log1p(np.exp(-np.abs(logits)))
@@ -69,13 +75,20 @@ def bce_with_logits(logits: np.ndarray, y: np.ndarray) -> float:
 # ── Adam Optimizer (NumPy) ───────────────────────────────────────────────────
 
 class AdamOptimizer:
-    """
-    Per-parameter adaptive learning rate (Kingma & Ba, 2014):
+    """Adam optimizer (Kingma & Ba, 2014) implemented in NumPy.
+
+    Updates each parameter with bias-corrected first/second moments::
+
         m_t = β1·m_{t-1} + (1-β1)·g
         v_t = β2·v_{t-1} + (1-β2)·g²
-        m̂  = m_t / (1 - β1^t)
-        v̂  = v_t / (1 - β2^t)
-        θ  = θ - lr · m̂ / (sqrt(v̂) + ε)
+        θ  -= lr · (m_t / (1-β1^t)) / (sqrt(v_t / (1-β2^t)) + ε)
+
+    Parameters
+    ----------
+    param_shapes : dict[str, tuple[int, ...]]
+        Parameter name → shape. Used to allocate moment buffers.
+    lr, beta1, beta2, eps : float
+        Standard Adam hyperparameters.
     """
 
     def __init__(
@@ -99,6 +112,7 @@ class AdamOptimizer:
         params: dict[str, np.ndarray],
         grads: dict[str, np.ndarray],
     ) -> None:
+        """Apply one in-place Adam update to ``params`` using ``grads``."""
         self.t += 1
         bc1 = 1.0 - self.beta1 ** self.t
         bc2 = 1.0 - self.beta2 ** self.t
@@ -114,10 +128,19 @@ class AdamOptimizer:
 # ── Network ──────────────────────────────────────────────────────────────────
 
 class ANNNet:
-    """
-    Feedforward network with one hidden layer (per proposal Eq. 5).
-    Pure-NumPy forward + backward. He init (He et al. 2015) keeps activation
-    variance roughly preserved through the ReLU hidden layer.
+    """Single-hidden-layer feedforward network (proposal Eq. 5).
+
+    Pure-NumPy forward and backward. He initialization (He et al., 2015)
+    keeps activation variance roughly preserved through the ReLU layer.
+
+    Parameters
+    ----------
+    input_dim : int
+        Feature dimensionality ``D``.
+    hidden_dim : int, default=64
+        Hidden layer width ``H``.
+    seed : int, default=SEED
+        RNG seed for weight initialization.
     """
 
     def __init__(self, input_dim: int, hidden_dim: int = 64, seed: int = SEED):
@@ -131,10 +154,24 @@ class ANNNet:
 
     @property
     def param_shapes(self) -> dict[str, tuple[int, ...]]:
+        """Map of parameter name → shape (used to size optimizer buffers)."""
         return {k: v.shape for k, v in self.params.items()}
 
     def forward(self, X: np.ndarray) -> tuple[np.ndarray, dict]:
-        """Return (logits with shape (N,), cache for backward)."""
+        """Run a forward pass.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Input batch, shape ``(N, D)``.
+
+        Returns
+        -------
+        logits : np.ndarray
+            Pre-sigmoid output, shape ``(N,)``.
+        cache : dict
+            Intermediates (``X``, ``z1``, ``h``) needed for ``backward``.
+        """
         z1 = X @ self.params["W1"] + self.params["b1"]   # (N, H)
         h = np.maximum(0.0, z1)                           # ReLU
         z2 = h @ self.params["W2"] + self.params["b2"]    # (N, 1)
@@ -148,11 +185,26 @@ class ANNNet:
         logits: np.ndarray,
         weight_decay: float = 0.0,
     ) -> dict[str, np.ndarray]:
-        """
-        Gradients for all parameters via backprop.
+        """Backpropagate to obtain parameter gradients.
 
-        Key identity: d(BCE)/dz_out = σ(z_out) - y. The numerically stable
-        loss only changes how L is *computed*; its derivative is unchanged.
+        Uses ``d(BCE)/dz_out = σ(z_out) - y``; the stable loss formulation
+        only changes how ``L`` is computed, not its derivative.
+
+        Parameters
+        ----------
+        cache : dict
+            Forward-pass intermediates.
+        y : np.ndarray
+            Binary labels, shape ``(N,)``.
+        logits : np.ndarray
+            Output of ``forward``, shape ``(N,)``.
+        weight_decay : float, default=0.0
+            L2 coefficient added to weight (not bias) gradients.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Gradients keyed by parameter name.
         """
         X, z1, h = cache["X"], cache["z1"], cache["h"]
         N = X.shape[0]
@@ -174,9 +226,11 @@ class ANNNet:
         return {"W1": dW1, "b1": db1, "W2": dW2, "b2": db2}
 
     def state_dict(self) -> dict[str, np.ndarray]:
+        """Return a deep-copied snapshot of parameters."""
         return {k: v.copy() for k, v in self.params.items()}
 
     def load_state_dict(self, state: dict[str, np.ndarray]) -> None:
+        """Overwrite parameters from a snapshot produced by ``state_dict``."""
         for k in self.params:
             self.params[k] = state[k].copy()
 
@@ -184,9 +238,33 @@ class ANNNet:
 # ── Wrapper (matches sklearn-ish interface used by KNN / LogReg) ────────────
 
 class ANN:
-    """
-    Thin wrapper around ANNNet exposing fit / predict / predict_proba so it
-    plugs directly into compute_metrics + permutation_importance.
+    """Sklearn-style wrapper around ``ANNNet``.
+
+    Exposes ``fit`` / ``predict`` / ``predict_proba`` so the model plugs
+    directly into ``compute_metrics`` and ``permutation_importance``.
+
+    Parameters
+    ----------
+    input_dim : int
+        Feature dimensionality.
+    hidden_dim : int, default=64
+        Width of the hidden layer.
+    learning_rate : float, default=0.01
+        Adam step size.
+    epochs : int, default=100
+        Maximum training epochs.
+    batch_size : int, default=256
+        Mini-batch size.
+    weight_decay : float, default=1e-4
+        L2 coefficient.
+    early_stopping : bool, default=True
+        Stop when validation loss has not improved for ``patience`` epochs.
+    patience : int, default=10
+        Early-stopping patience.
+    seed : int, default=SEED
+        RNG seed for weight init and batch shuffling.
+    verbose : bool, default=False
+        Print periodic loss updates.
     """
 
     def __init__(
@@ -227,6 +305,20 @@ class ANN:
         X_val: np.ndarray | None = None,
         y_val: np.ndarray | None = None,
     ) -> "ANN":
+        """Train via mini-batch Adam with optional early stopping.
+
+        Parameters
+        ----------
+        X_train, y_train : np.ndarray
+            Training features ``(N, D)`` and labels ``(N,)`` in ``{0, 1}``.
+        X_val, y_val : np.ndarray, optional
+            Validation set; required for early stopping.
+
+        Returns
+        -------
+        ANN
+            ``self``, for sklearn-style fluent chaining.
+        """
         self.net = ANNNet(self.input_dim, self.hidden_dim, seed=self.seed)
         optim = AdamOptimizer(self.net.param_shapes, lr=self.lr)
 
@@ -295,11 +387,13 @@ class ANN:
     # ── Predict ──────────────────────────────────────────────────────────
 
     def predict_proba(self, X_query: np.ndarray) -> np.ndarray:
+        """Return ``P(y=1 | x)`` for each row of ``X_query``."""
         assert self.net is not None, "Call fit() before predict_proba()."
         logits, _ = self.net.forward(np.asarray(X_query, dtype=np.float64))
         return stable_sigmoid(logits)
 
     def predict(self, X_query: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+        """Return hard labels ``{0, 1}`` using ``threshold`` on ``predict_proba``."""
         return (self.predict_proba(X_query) >= threshold).astype(np.float64)
 
 
@@ -307,6 +401,7 @@ class ANN:
 
 @dataclass(frozen=True)
 class ANNConfig:
+    """Hyperparameter triple selected by grid search."""
     lr: float
     hidden_dim: int
     epochs: int
@@ -321,7 +416,22 @@ def grid_search(
     hidden_values: tuple[int, ...] = (32, 64, 128),
     epoch_values: tuple[int, ...] = (50, 100, 200),
 ) -> tuple[ANNConfig, list[dict]]:
-    """Grid search matching the proposal hyperparameter ranges."""
+    """Exhaustive grid search over the proposal hyperparameter ranges.
+
+    Parameters
+    ----------
+    X_train, y_train, X_val, y_val : np.ndarray
+        Train/validation splits.
+    lr_values, hidden_values, epoch_values : tuple
+        Candidate values for each axis.
+
+    Returns
+    -------
+    best_cfg : ANNConfig
+        Configuration with highest validation F1.
+    results : list[dict]
+        Per-configuration metrics + wall time, suitable for CSV export.
+    """
     results: list[dict] = []
     best_f1, best_cfg = -1.0, None
     input_dim = X_train.shape[1]
@@ -427,13 +537,12 @@ if __name__ == "__main__":
     for rank, idx in enumerate(ranked):
         print(f"  {rank+1:>4}  {feature_names[idx]:<28} {importances[idx]:+.4f}")
 
-    # 7. Save results (mirrors KNN / LogReg naming convention)
+    # 7. Save results (mirrors KNN / LogReg naming convention).
+    #    .npz bundles the four weight arrays into one NumPy-native archive.
     os.makedirs("models", exist_ok=True)
     np.save("models/ann_y_pred.npy",      y_pred)
     np.save("models/ann_y_proba.npy",     y_proba)
     np.save("models/ann_importances.npy", importances)
-    # Bundle the four weight tensors into a single NumPy archive (.npz is the
-    # native multi-array container — still NumPy-only, no torch dependency).
     np.savez(
         "models/ann_weights.npz",
         W1=best_model.net.params["W1"],

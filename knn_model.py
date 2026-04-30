@@ -242,12 +242,12 @@ if __name__ == "__main__":
 
     # 3. Grid search
     print("\n── Grid Search ─────────────────────────────────────")
-    # best_cfg, gs_results = grid_search(X_tr, y_tr, X_val, y_val)
-    best_cfg, gs_results = grid_search(
-        X_tr, y_tr, X_val, y_val,
-        k_values=(5,),
-        metrics_list=("Euclidean",)
-    )
+    best_cfg, gs_results = grid_search(X_tr, y_tr, X_val, y_val)
+    # best_cfg, gs_results = grid_search(
+    #     X_tr, y_tr, X_val, y_val,
+    #     k_values=(5,),
+    #     metrics_list=("Euclidean",)
+    # )
     print(f"\n★ Best config: k={best_cfg['k']}, metric={best_cfg['metric']}")
 
     # 4. Train best model on full train set

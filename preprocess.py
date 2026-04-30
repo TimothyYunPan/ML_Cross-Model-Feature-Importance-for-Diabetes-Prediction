@@ -42,17 +42,44 @@ RANDOM_SEED    = 42
 
 # ── 1. Load Data ─────────────────────────────────────────────────────────────
 
+def _resolve_dataset_path(path: str) -> str:
+    """
+    Resolve a usable dataset path.
+    Priority:
+      1) explicit `path`
+      2) known fallback path
+      3) first CSV found in ./data
+    """
+    candidates = [path, FULL_DATA_PATH]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    if os.path.isdir("data"):
+        data_csvs = sorted(
+            [f for f in os.listdir("data") if f.lower().endswith(".csv")]
+        )
+        if data_csvs:
+            auto_path = os.path.join("data", data_csvs[0])
+            print(f"[preprocess] Using detected dataset: '{auto_path}'")
+            return auto_path
+
+    raise FileNotFoundError(
+        "\n[ERROR] Dataset not found.\n"
+        f"Tried:\n  - {path}\n  - {FULL_DATA_PATH}\n"
+        "and no CSV was found in the data/ folder.\n"
+        "Please download from:\n"
+        "  https://www.kaggle.com/datasets/alexteboul/diabetes-health-indicators-dataset\n"
+        "then place the CSV inside data/."
+    )
+
+
 def load_data(path: str) -> pd.DataFrame:
     """Load CSV and do basic validation."""
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"\n[ERROR] Dataset not found at '{path}'.\n"
-            "Please download from:\n"
-            "  https://www.kaggle.com/datasets/alexteboul/diabetes-health-indicators-dataset\n"
-            "and place the CSV in the data/ folder."
-        )
-    df = pd.read_csv(path)
-    print(f"[load] Loaded {len(df):,} rows × {df.shape[1]} cols from '{path}'")
+    resolved_path = _resolve_dataset_path(path)
+    df = pd.read_csv(resolved_path)
+    print(f"[load] Loaded {len(df):,} rows × {df.shape[1]} cols from '{resolved_path}'")
     return df
 
 # ── 2. EDA ───────────────────────────────────────────────────────────────────

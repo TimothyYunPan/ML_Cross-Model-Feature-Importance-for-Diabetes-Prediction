@@ -1,9 +1,23 @@
 # Dataset (download manually from Kaggle)
 data/
 
-# Saved model weights
+# Saved model weights (default: do not commit huge/regenerable outputs)
 models/*.npy
 models/*.npz
+# Exceptions: artifacts required for Streamlit Cloud (after local preprocess + train)
+!models/feature_names.npy
+!models/feat_min.npy
+!models/feat_max.npy
+!models/ann_best_config.npy
+!models/ann_weights.npz
+!models/ann_importances.npy
+!models/logreg_weights.npy
+!models/logreg_bias.npy
+!models/logreg_importances.npy
+!models/knn_best_config.npy
+!models/knn_importances.npy
+!models/X_train.npy
+!models/y_train.npy
 
 # Python
 __pycache__/

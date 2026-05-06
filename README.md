@@ -29,3 +29,14 @@ python preprocess.py
 **Result:** X_train: (54,810 × 21), X_test: (13,701 × 21)
  
 > **Note:** After BMI outlier removal, the train set class balance is 27,888 (negative) vs. 26,922 (positive) — a slight imbalance. This is expected: BMI outliers were not evenly distributed across classes, so removing them introduced a small skew. This is not a bug and does not significantly affect model training given the near-equal split.
+
+## Frontend-Backend Integration (Summary)
+
+This project currently uses a single Streamlit app (`app.py`) for both frontend and backend logic.
+
+- Frontend: user inputs and UI rendering in Streamlit
+- Backend: feature normalization + model inference (ANN / Logistic Regression / KNN)
+- Data flow: input -> normalize -> `predict_proba` -> probability + risk class + feature-importance chart
+
+For detailed integration notes, see:
+- `README_frontend_backend.md`

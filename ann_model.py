@@ -397,6 +397,205 @@ class ANN:
         return (self.predict_proba(X_query) >= threshold).astype(np.float64)
 
 
+# ── Two-Hidden-Layer Network (extension beyond proposal Eq. 5) ───────────────
+
+class ANNNet2:
+    """Two-hidden-layer feedforward network.
+
+    Architecture::
+
+        h1    = ReLU(W1·x  + b1)
+        h2    = ReLU(W2·h1 + b2)
+        y_hat = σ   (W3·h2 + b3)
+
+    Same He init / pure-NumPy backprop discipline as :class:`ANNNet`.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dims: tuple[int, int] = (128, 64),
+        seed: int = SEED,
+    ):
+        rng = np.random.default_rng(seed)
+        h1, h2 = hidden_dims
+        self.params: dict[str, np.ndarray] = {
+            "W1": rng.standard_normal((input_dim, h1)) * np.sqrt(2.0 / input_dim),
+            "b1": np.zeros(h1, dtype=np.float64),
+            "W2": rng.standard_normal((h1, h2)) * np.sqrt(2.0 / h1),
+            "b2": np.zeros(h2, dtype=np.float64),
+            "W3": rng.standard_normal((h2, 1)) * np.sqrt(2.0 / h2),
+            "b3": np.zeros(1, dtype=np.float64),
+        }
+
+    @property
+    def param_shapes(self) -> dict[str, tuple[int, ...]]:
+        return {k: v.shape for k, v in self.params.items()}
+
+    def forward(self, X: np.ndarray) -> tuple[np.ndarray, dict]:
+        z1 = X @ self.params["W1"] + self.params["b1"]   # (N, H1)
+        h1 = np.maximum(0.0, z1)
+        z2 = h1 @ self.params["W2"] + self.params["b2"]  # (N, H2)
+        h2 = np.maximum(0.0, z2)
+        z3 = h2 @ self.params["W3"] + self.params["b3"]  # (N, 1)
+        return z3.squeeze(-1), {"X": X, "z1": z1, "h1": h1, "z2": z2, "h2": h2}
+
+    def backward(
+        self,
+        cache: dict,
+        y: np.ndarray,
+        logits: np.ndarray,
+        weight_decay: float = 0.0,
+    ) -> dict[str, np.ndarray]:
+        X = cache["X"]
+        z1, h1, z2, h2 = cache["z1"], cache["h1"], cache["z2"], cache["h2"]
+        N = X.shape[0]
+
+        dz3 = (stable_sigmoid(logits) - y)[:, None] / N   # (N, 1)
+        dW3 = h2.T @ dz3                                   # (H2, 1)
+        db3 = dz3.sum(axis=0)
+
+        dh2 = dz3 @ self.params["W3"].T                    # (N, H2)
+        dz2 = dh2 * (z2 > 0)
+        dW2 = h1.T @ dz2                                   # (H1, H2)
+        db2 = dz2.sum(axis=0)
+
+        dh1 = dz2 @ self.params["W2"].T                    # (N, H1)
+        dz1 = dh1 * (z1 > 0)
+        dW1 = X.T @ dz1                                    # (D, H1)
+        db1 = dz1.sum(axis=0)
+
+        if weight_decay > 0:
+            dW1 = dW1 + weight_decay * self.params["W1"]
+            dW2 = dW2 + weight_decay * self.params["W2"]
+            dW3 = dW3 + weight_decay * self.params["W3"]
+
+        return {"W1": dW1, "b1": db1, "W2": dW2, "b2": db2, "W3": dW3, "b3": db3}
+
+    def state_dict(self) -> dict[str, np.ndarray]:
+        return {k: v.copy() for k, v in self.params.items()}
+
+    def load_state_dict(self, state: dict[str, np.ndarray]) -> None:
+        for k in self.params:
+            self.params[k] = state[k].copy()
+
+
+class ANN2:
+    """Sklearn-style wrapper around :class:`ANNNet2`.
+
+    Mirrors :class:`ANN` exactly except the hidden layer is a 2-tuple.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dims: tuple[int, int] = (128, 64),
+        learning_rate: float = 0.01,
+        epochs: int = 100,
+        batch_size: int = 256,
+        weight_decay: float = 1e-4,
+        early_stopping: bool = True,
+        patience: int = 10,
+        seed: int = SEED,
+        verbose: bool = False,
+    ):
+        self.model_name = "ANN (2 hidden layers)"
+        self.input_dim = input_dim
+        self.hidden_dims = hidden_dims
+        self.lr = learning_rate
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.weight_decay = weight_decay
+        self.early_stopping = early_stopping
+        self.patience = patience
+        self.seed = seed
+        self.verbose = verbose
+
+        self.net: ANNNet2 | None = None
+        self.train_loss_history: list[float] = []
+        self.val_loss_history: list[float] = []
+
+    def fit(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray | None = None,
+        y_val: np.ndarray | None = None,
+    ) -> "ANN2":
+        self.net = ANNNet2(self.input_dim, self.hidden_dims, seed=self.seed)
+        optim = AdamOptimizer(self.net.param_shapes, lr=self.lr)
+
+        rng = np.random.default_rng(self.seed)
+        X_tr = np.asarray(X_train, dtype=np.float64)
+        y_tr = np.asarray(y_train, dtype=np.float64)
+        N = X_tr.shape[0]
+
+        has_val = X_val is not None and y_val is not None
+        if has_val:
+            X_v = np.asarray(X_val, dtype=np.float64)
+            y_v = np.asarray(y_val, dtype=np.float64)
+
+        best_val_loss = float("inf")
+        best_state: dict | None = None
+        epochs_no_improve = 0
+
+        for epoch in range(self.epochs):
+            perm = rng.permutation(N)
+            epoch_loss = 0.0
+            n_seen = 0
+
+            for start in range(0, N, self.batch_size):
+                idx = perm[start:start + self.batch_size]
+                xb, yb = X_tr[idx], y_tr[idx]
+
+                logits, cache = self.net.forward(xb)
+                loss = bce_with_logits(logits, yb)
+                grads = self.net.backward(cache, yb, logits, self.weight_decay)
+                optim.step(self.net.params, grads)
+
+                epoch_loss += loss * xb.shape[0]
+                n_seen += xb.shape[0]
+
+            train_loss = epoch_loss / n_seen
+            self.train_loss_history.append(train_loss)
+
+            if has_val:
+                val_logits, _ = self.net.forward(X_v)
+                val_loss = bce_with_logits(val_logits, y_v)
+                self.val_loss_history.append(val_loss)
+
+                if self.early_stopping:
+                    if val_loss < best_val_loss - 1e-6:
+                        best_val_loss = val_loss
+                        best_state = self.net.state_dict()
+                        epochs_no_improve = 0
+                    else:
+                        epochs_no_improve += 1
+                        if epochs_no_improve >= self.patience:
+                            if self.verbose:
+                                print(f"    [early stop] epoch {epoch+1}, "
+                                      f"best val_loss={best_val_loss:.4f}")
+                            break
+
+            if self.verbose and (epoch + 1) % max(1, self.epochs // 10) == 0:
+                tail = f"  val_loss={self.val_loss_history[-1]:.4f}" if has_val else ""
+                print(f"    epoch {epoch+1:>3}/{self.epochs}  "
+                      f"train_loss={train_loss:.4f}{tail}")
+
+        if self.early_stopping and best_state is not None:
+            self.net.load_state_dict(best_state)
+
+        return self
+
+    def predict_proba(self, X_query: np.ndarray) -> np.ndarray:
+        assert self.net is not None, "Call fit() before predict_proba()."
+        logits, _ = self.net.forward(np.asarray(X_query, dtype=np.float64))
+        return stable_sigmoid(logits)
+
+    def predict(self, X_query: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+        return (self.predict_proba(X_query) >= threshold).astype(np.float64)
+
+
 # ── Grid Search ──────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

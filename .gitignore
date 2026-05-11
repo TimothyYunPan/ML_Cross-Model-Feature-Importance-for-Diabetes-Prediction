@@ -1,5 +1,5 @@
 # Dataset (download manually from Kaggle)
-data/
+# data/
 
 # Saved model weights (default: do not commit huge/regenerable outputs)
 models/*.npy

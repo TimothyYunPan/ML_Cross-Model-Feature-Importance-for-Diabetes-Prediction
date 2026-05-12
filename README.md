@@ -24,6 +24,8 @@ That's it. [complete_pipeline.ipynb](complete_pipeline.ipynb) is fully self-cont
 
 The interactive demo (live prediction + KNN-based "what to change" recommendations) lives in `app.py`. See **[README_frontend_backend.md](README_frontend_backend.md)** for setup and request-flow details.
 
+[Streamlit web app](https://mlcross-model-feature-importance-for-diabetes-prediction-aqx3o.streamlit.app/)
+
 ### Current setup
 
 This project currently uses a single Streamlit app (`app.py`) for both UI and prediction logic.
